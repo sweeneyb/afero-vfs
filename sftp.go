@@ -115,6 +115,7 @@ func handleConn(conn net.Conn, config *ssh.ServerConfig) {
 				if req.Type == "subsystem" && string(req.Payload[4:]) == "sftp" {
 					req.Reply(true, nil)
 					dummyFS := DummyFS{}
+					log.Printf("SFTP connected with user %v.", sshConn.User())
 					server := sftp.NewRequestServer(channel, sftp.Handlers{
 						// FileGet:  sftp.FileReader(fs),
 						FileGet: dummyFS,
