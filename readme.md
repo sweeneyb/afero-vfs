@@ -19,6 +19,9 @@ curl "http://localhost:8080/list?user=alice"
 curl -OJ "http://localhost:8080/download?user=alice&path=myfile.txt"
 cat myfile.txt
 rm myfile.txt
+
+curl "http://localhost:8080/allow_write?user=bob&allowed=alice"
+
 curl "http://localhost:8080/copy_by_path?from_user=alice&src_path=myfile.txt&to_user=bob&subfolder=shared"
 curl "http://localhost:8080/list?user=bob"
 curl -OJ "http://localhost:8080/download?user=bob&path=shared/myfile.txt"

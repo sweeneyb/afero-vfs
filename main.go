@@ -9,6 +9,9 @@ import (
 	"sync"
 	"os"
 
+	"encoding/json"
+
+
 	"github.com/google/uuid"
 	"github.com/spf13/afero"
 )
@@ -25,6 +28,12 @@ type FileMeta struct {
 	User     string
 	Filename string
 }
+
+var (
+	permissions = make(map[string]map[string]bool) // destUser -> allowedWriters
+	permLock    sync.RWMutex
+)
+
 
 // Get or create a user's filesystem
 func getUserFS(username string) afero.Fs {
@@ -86,6 +95,17 @@ func copyByPathHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// If writing to "shared", enforce permission check
+	if subfolder == "shared" {
+		permLock.RLock()
+		allowed, ok := permissions[toUser][fromUser]
+		permLock.RUnlock()
+		if !ok || !allowed {
+			http.Error(w, fmt.Sprintf("User '%s' is not allowed to write to '%s's shared folder", fromUser, toUser), http.StatusForbidden)
+			return
+		}
+	}
+
 	srcFS := getUserFS(fromUser)
 	destFS := getUserFS(toUser)
 
@@ -98,10 +118,6 @@ func copyByPathHandler(w http.ResponseWriter, r *http.Request) {
 	destPath := srcPath
 	if subfolder != "" {
 		destPath = fmt.Sprintf("%s/%s", subfolder, afero.FilePathSeparator+srcPath)
-	}
-
-	// Ensure destination subfolder exists
-	if subfolder != "" {
 		aferoFs := afero.Afero{Fs: destFS}
 		if err := aferoFs.MkdirAll(subfolder, 0755); err != nil {
 			http.Error(w, "Failed to create subfolder", http.StatusInternalServerError)
@@ -116,6 +132,7 @@ func copyByPathHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Write([]byte(fmt.Sprintf("Copied '%s' to user '%s' at '%s'", srcPath, toUser, destPath)))
 }
+
 
 
 // Copy handler
@@ -201,6 +218,60 @@ func downloadHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
+func allowWriteHandler(w http.ResponseWriter, r *http.Request) {
+	user := r.URL.Query().Get("user")         // the owner of the shared folder
+	allowUser := r.URL.Query().Get("allowed") // the user to allow
+
+	if user == "" || allowUser == "" {
+		http.Error(w, "Missing parameters", http.StatusBadRequest)
+		return
+	}
+
+	permLock.Lock()
+	defer permLock.Unlock()
+
+	if _, ok := permissions[user]; !ok {
+		permissions[user] = make(map[string]bool)
+	}
+	permissions[user][allowUser] = true
+
+	w.Write([]byte(fmt.Sprintf("User '%s' is now allowed to write to '%s's shared directory", allowUser, user)))
+}
+
+func showPermissionsHandler(w http.ResponseWriter, r *http.Request) {
+	user := r.URL.Query().Get("user")
+	if user == "" {
+		http.Error(w, "Missing 'user' parameter", http.StatusBadRequest)
+		return
+	}
+
+	permLock.RLock()
+	defer permLock.RUnlock()
+
+	allowedUsers, ok := permissions[user]
+	if !ok {
+		// Return empty list if no permissions set
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte("[]"))
+		return
+	}
+
+	var list []string
+	for u := range allowedUsers {
+		list = append(list, u)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	jsonBytes, err := json.Marshal(list)
+	if err != nil {
+		http.Error(w, "Failed to serialize permissions", http.StatusInternalServerError)
+		return
+	}
+	w.Write(jsonBytes)
+}
+
+
+
 
 func main() {
 	http.HandleFunc("/upload", uploadHandler)
@@ -208,6 +279,9 @@ func main() {
 	http.HandleFunc("/copy_by_path", copyByPathHandler)
 	http.HandleFunc("/list", listHandler) 
 	http.HandleFunc("/download", downloadHandler)
+	http.HandleFunc("/allow_write", allowWriteHandler)
+	http.HandleFunc("/show_permissions", showPermissionsHandler)
+
 	log.Println("Server running at :8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
